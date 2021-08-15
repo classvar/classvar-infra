@@ -4,7 +4,7 @@ networks:
   net:
     driver: overlay
     #attachable: true # 모든 overlay 네트워크는 attachable이며 설정이 불가능하다.
-  traefik-public:
+  classvar-traefik-lb:
     driver: overlay
     external: true 
     # 외부에서 정의되는 network를 의미함
@@ -16,15 +16,12 @@ volumes:
     alertmanager: {}
 
 configs:
-  dockerd_config:
-    file: ./dockerd-exporter/Caddyfile
   node_rules:
     file: ./prometheus/rules/swarm_node.rules.yml
   task_rules:
     file: ./prometheus/rules/swarm_task.rules.yml
 
 services:
-
   traefik:
     image: traefik:v2.0
     # restart: always
@@ -44,7 +41,7 @@ services:
       - --providers.docker=true # <== provider로 Docker 사용
       - --providers.docker.swarmMode=true # <== Swarm Mode 사용
       - --providers.docker.exposedbydefault=false # <== 모든 Service를 traefik에 넘기는 게 아니라, label 붙은 애만 적용하도록 함
-      - --providers.docker.network=traefik-public # 트래픽이 컨테이너로 접속할 때 쓸 network 이름. (정확히 무슨 기능인지는 잘..)
+      - --providers.docker.network=classvar-traefik-lb # 트래픽이 컨테이너로 접속할 때 쓸 network 이름. (정확히 무슨 기능인지는 잘..)
       - --providers.file.filename=/dynamic.yaml # <== 파일 프로바이더 옵션. dynamic configuration file의 경로
       ## Entrypoints Settings
       - --entrypoints.web.address=:80 # <== 엔트리포인트 정의 (나중에 이해 ㄱ) port :80 named web
@@ -54,7 +51,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock # <== Volume for docker admin
       - ./dynamic.yaml:/dynamic.yaml # <== dynamic 파일 프로바이더 마운트
     networks:
-      - traefik-public # <== 사용할 네트워크명. 해당 네트워크 상의 서비스끼리만 DNS가 되니까.
+      - classvar-traefik-lb # <== 사용할 네트워크명. 해당 네트워크 상의 서비스끼리만 DNS가 되니까.
     deploy:
       placement:
         constraints:
@@ -114,14 +111,14 @@ services:
       # additional property label is not allowed
       #label:
       #  - traefik.enable=true
-      #  - traefik.docker.network=traefik-public
+      #  - traefik.docker.network=classvar-traefik-lb
 
   grafana:
     image: stefanprodan/swarmprom-grafana:5.3.4
     networks:
       - default
       - net
-      - traefik-public
+      - classvar-traefik-lb
     environment:
       - GF_SECURITY_ADMIN_USER=${ADMIN_USER:-admin}
       - GF_SECURITY_ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin}
@@ -148,22 +145,22 @@ services:
           memory: 64M
       labels:
         - traefik.enable=true
-        - traefik.docker.network=traefik-public
-        - traefik.http.routers.swarmprom-grafana-http.rule=Host(`grafana.${DOMAIN?Variable DOMAIN not set}`)
-        - traefik.http.routers.swarmprom-grafana-http.entrypoints=web
-        - traefik.http.routers.swarmprom-grafana-http.middlewares=https-redirect@file
-        - traefik.http.routers.swarmprom-grafana-https.rule=Host(`grafana.${DOMAIN?Variable DOMAIN not set}`)
-        - traefik.http.routers.swarmprom-grafana-https.entrypoints=web-secured
-        - traefik.http.routers.swarmprom-grafana-https.tls=true
-        # - traefik.http.routers.swarmprom-grafana-https.tls.certresolver=le
-        - traefik.http.services.swarmprom-grafana.loadbalancer.server.port=3000
+        - traefik.docker.network=classvar-traefik-lb
+        - traefik.http.routers.classvar-grafana-http.rule=Host(`grafana.${DOMAIN?Variable DOMAIN not set}`)
+        - traefik.http.routers.classvar-grafana-http.entrypoints=web
+        - traefik.http.routers.classvar-grafana-http.middlewares=https-redirect@file
+        - traefik.http.routers.classvar-grafana-https.rule=Host(`grafana.${DOMAIN?Variable DOMAIN not set}`)
+        - traefik.http.routers.classvar-grafana-https.entrypoints=web-secured
+        - traefik.http.routers.classvar-grafana-https.tls=true
+        # - traefik.http.routers.classvar-grafana-https.tls.certresolver=le
+        - traefik.http.services.classvar-grafana.loadbalancer.server.port=3000
 
   prometheus:
     image: stefanprodan/swarmprom-prometheus:v2.5.0
     networks:
       - default
       - net
-      - traefik-public
+      - classvar-traefik-lb
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
@@ -188,14 +185,38 @@ services:
           memory: 128M
       labels:
         - traefik.enable=true
-        - traefik.docker.network=traefik-public
-        - traefik.http.routers.swarmprom-prometheus-http.rule=Host(`prometheus.${DOMAIN?Variable DOMAIN not set}`)
-        - traefik.http.routers.swarmprom-prometheus-http.entrypoints=web
-        - traefik.http.routers.swarmprom-prometheus-http.middlewares=https-redirect@file
-        - traefik.http.routers.swarmprom-prometheus-https.rule=Host(`prometheus.${DOMAIN?Variable DOMAIN not set}`)
-        - traefik.http.routers.swarmprom-prometheus-https.entrypoints=web-secured
-        - traefik.http.routers.swarmprom-prometheus-https.tls=true
-        # - traefik.http.routers.swarmprom-prometheus-https.tls.certresolver=le
-        - traefik.http.services.swarmprom-prometheus.loadbalancer.server.port=9090
-        - traefik.http.middlewares.swarmprom-prometheus-auth.basicauth.users=${ADMIN_USER?Variable ADMIN_USER not set}:${HASHED_PASSWORD?Variable HASHED_PASSWORD not set}
-        - traefik.http.routers.swarmprom-prometheus-https.middlewares=swarmprom-prometheus-auth
+        - traefik.docker.network=classvar-traefik-lb
+        - traefik.http.routers.classvar-prometheus-http.rule=Host(`prometheus.${DOMAIN?Variable DOMAIN not set}`)
+        - traefik.http.routers.classvar-prometheus-http.entrypoints=web
+        - traefik.http.routers.classvar-prometheus-http.middlewares=https-redirect@file
+        - traefik.http.routers.classvar-prometheus-https.rule=Host(`prometheus.${DOMAIN?Variable DOMAIN not set}`)
+        - traefik.http.routers.classvar-prometheus-https.entrypoints=web-secured
+        - traefik.http.routers.classvar-prometheus-https.tls=true
+        # - traefik.http.routers.classvar-prometheus-https.tls.certresolver=le
+        - traefik.http.services.classvar-prometheus.loadbalancer.server.port=9090
+        - traefik.http.middlewares.classvar-prometheus-auth.basicauth.users=${ADMIN_USER?Variable ADMIN_USER not set}:${HASHED_PASSWORD?Variable HASHED_PASSWORD not set}
+        - traefik.http.routers.classvar-prometheus-https.middlewares=classvar-prometheus-auth
+
+  portainer:
+    image: portainer/portainer
+    networks:
+      - classvar-traefik-lb
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /opt/portainer:/data
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      labels:
+        - traefik.enable=true
+        - traefik.docker.network=classvar-traefik-lb
+        - traefik.http.routers.classvar-portainer-http.rule=Host(`portainer.${DOMAIN?Variable DOMAIN not set}`)
+        - traefik.http.routers.classvar-portainer-http.entrypoints=web
+        - traefik.http.routers.classvar-portainer-http.middlewares=https-redirect@file
+        - traefik.http.routers.classvar-portainer-https.rule=Host(`portainer.${DOMAIN?Variable DOMAIN not set}`)
+        - traefik.http.routers.classvar-portainer-https.entrypoints=web-secured
+        - traefik.http.routers.classvar-portainer-https.tls=true
+        - traefik.http.services.classvar-portainer.loadbalancer.server.port=9000

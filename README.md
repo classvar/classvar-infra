@@ -2,6 +2,10 @@
 
 ClassVAR는 높은 확장성 및 가용성을 목표로 컨테이너 기반의 MSA 구조로 개발되었습니다.
 
+현재는 Swarmprom 템플릿 이미지를 빌렸지만 확장하면서 정규 이미지로 교체할 예정입니다.
+
+[실행 방법은 이 문서를 참고](./RUN.md)
+
 ### Load Balancing
 
 [Traefik](https://traefik.io/) - Orchestration-aware Router
@@ -50,4 +54,4 @@ Docker Swarm (TODO - utilizing `docker stack deploy`)
 
 ### Monitoring
 
-Grafana, Prometheus
+Grafana, Prometheus, Portainer
