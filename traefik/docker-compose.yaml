@@ -1,0 +1,201 @@
+version: "3.7"
+
+networks:
+  net:
+    driver: overlay
+    #attachable: true # 모든 overlay 네트워크는 attachable이며 설정이 불가능하다.
+  traefik-public:
+    driver: overlay
+    external: true 
+    # 외부에서 정의되는 network를 의미함
+    # 내부에서 생성하면 network 이름에 prefix가 붙음. 그게 문제가 되는지는 모르겠음...
+
+volumes:
+    prometheus: {}
+    grafana: {}
+    alertmanager: {}
+
+configs:
+  dockerd_config:
+    file: ./dockerd-exporter/Caddyfile
+  node_rules:
+    file: ./prometheus/rules/swarm_node.rules.yml
+  task_rules:
+    file: ./prometheus/rules/swarm_task.rules.yml
+
+services:
+
+  traefik:
+    image: traefik:v2.0
+    # restart: always
+    # container_name: traefik
+    ports:
+      - "80:80" # <== http
+      - "443:443" # <== https
+    command:
+    #### These are the CLI commands that will configure Traefik and tell it how to work! ####
+      ## API Settings 
+      - --api.insecure=true # <== insecure api (HTTP API) 활성화. NOT RECOMMENDED FOR PRODUCTION
+      - --api.dashboard=true # <== 대시보드 활성화
+      - --api.debug=true # <== 디버그 출력 활성화
+      ## Log Settings (options: ERROR, DEBUG, PANIC, FATAL, WARN, INFO)
+      - --log.level=ERROR # <== 로그 레벨 설정 (docker logs traefik)
+      ## Provider Settings
+      - --providers.docker=true # <== provider로 Docker 사용
+      - --providers.docker.swarmMode=true # <== Swarm Mode 사용
+      - --providers.docker.exposedbydefault=false # <== 모든 Service를 traefik에 넘기는 게 아니라, label 붙은 애만 적용하도록 함
+      - --providers.docker.network=traefik-public # 트래픽이 컨테이너로 접속할 때 쓸 network 이름. (정확히 무슨 기능인지는 잘..)
+      - --providers.file.filename=/dynamic.yaml # <== 파일 프로바이더 옵션. dynamic configuration file의 경로
+      ## Entrypoints Settings
+      - --entrypoints.web.address=:80 # <== 엔트리포인트 정의 (나중에 이해 ㄱ) port :80 named web
+      - --entrypoints.web-secured.address=:443 # <== 엔트리포인트 정의 for https on port :443 named web-secured
+    volumes:
+      # - ./letsencrypt:/letsencrypt # <== Volume for certs (TLS)
+      - /var/run/docker.sock:/var/run/docker.sock # <== Volume for docker admin
+      - ./dynamic.yaml:/dynamic.yaml # <== dynamic 파일 프로바이더 마운트
+    networks:
+      - traefik-public # <== 사용할 네트워크명. 해당 네트워크 상의 서비스끼리만 DNS가 되니까.
+    deploy:
+      placement:
+        constraints:
+          - node.role == manager
+      labels:
+        #### 이건 deploy.labels가 아니므로, 트래픽 컨테이너에 붙는 레이블임. ####
+        # 이걸 deploy 밑에다 놓으면 안 되는듯
+        - traefik.enable=true # <== Enable traefik on itself to view dashboard and assign subdomain to view it
+        - traefik.http.routers.api.rule=Host(`traefik.localhost`) # <== Setting the domain for the dashboard
+        - traefik.http.routers.api.service=api@internal # <== Enabling the api to be a service to access
+        - traefik.http.services.traefik_dashboard.loadbalancer.server.port=8080
+
+  # Node 정보 제공
+  node-exporter:
+    image: stefanprodan/swarmprom-node-exporter:v0.16.0
+    networks:
+      - net
+    environment:
+      - NODE_ID={{.Node.ID}}
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+      - /etc/hostname:/etc/nodename
+    command:
+      - '--path.sysfs=/host/sys'
+      - '--path.procfs=/host/proc'
+      - '--collector.textfile.directory=/etc/node-exporter/'
+      - '--collector.filesystem.ignored-mount-points=^/(sys|proc|dev|host|etc)($$|/)'
+      - '--no-collector.ipvs'
+    deploy:
+      mode: global
+      resources:
+        limits:
+          memory: 128M
+        reservations:
+          memory: 64M
+
+  cadvisor:
+    image: google/cadvisor
+    networks:
+      - net
+    command: -logtostderr -docker_only
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /:/rootfs:ro
+      - /var/run:/var/run
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    deploy:
+      mode: global
+      resources:
+        limits:
+          memory: 128M
+        reservations:
+          memory: 64M
+      # additional property label is not allowed
+      #label:
+      #  - traefik.enable=true
+      #  - traefik.docker.network=traefik-public
+
+  grafana:
+    image: stefanprodan/swarmprom-grafana:5.3.4
+    networks:
+      - default
+      - net
+      - traefik-public
+    environment:
+      - GF_SECURITY_ADMIN_USER=${ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      #- GF_SERVER_ROOT_URL=${GF_SERVER_ROOT_URL:-localhost}
+      #- GF_SMTP_ENABLED=${GF_SMTP_ENABLED:-false}
+      #- GF_SMTP_FROM_ADDRESS=${GF_SMTP_FROM_ADDRESS:-grafana@test.com}
+      #- GF_SMTP_FROM_NAME=${GF_SMTP_FROM_NAME:-Grafana}
+      #- GF_SMTP_HOST=${GF_SMTP_HOST:-smtp:25}
+      #- GF_SMTP_USER=${GF_SMTP_USER}
+      #- GF_SMTP_PASSWORD=${GF_SMTP_PASSWORD}
+    volumes:
+      - grafana:/var/lib/grafana
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          memory: 128M
+        reservations:
+          memory: 64M
+      labels:
+        - traefik.enable=true
+        - traefik.docker.network=traefik-public
+        - traefik.http.routers.swarmprom-grafana-http.rule=Host(`grafana.${DOMAIN?Variable DOMAIN not set}`)
+        - traefik.http.routers.swarmprom-grafana-http.entrypoints=web
+        - traefik.http.routers.swarmprom-grafana-http.middlewares=https-redirect@file
+        - traefik.http.routers.swarmprom-grafana-https.rule=Host(`grafana.${DOMAIN?Variable DOMAIN not set}`)
+        - traefik.http.routers.swarmprom-grafana-https.entrypoints=web-secured
+        - traefik.http.routers.swarmprom-grafana-https.tls=true
+        # - traefik.http.routers.swarmprom-grafana-https.tls.certresolver=le
+        - traefik.http.services.swarmprom-grafana.loadbalancer.server.port=3000
+
+  prometheus:
+    image: stefanprodan/swarmprom-prometheus:v2.5.0
+    networks:
+      - default
+      - net
+      - traefik-public
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention=${PROMETHEUS_RETENTION:-24h}'
+    volumes:
+      - prometheus:/prometheus
+    configs:
+      - source: node_rules
+        target: /etc/prometheus/swarm_node.rules.yml
+      - source: task_rules
+        target: /etc/prometheus/swarm_task.rules.yml
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          memory: 2048M
+        reservations:
+          memory: 128M
+      labels:
+        - traefik.enable=true
+        - traefik.docker.network=traefik-public
+        - traefik.http.routers.swarmprom-prometheus-http.rule=Host(`prometheus.${DOMAIN?Variable DOMAIN not set}`)
+        - traefik.http.routers.swarmprom-prometheus-http.entrypoints=web
+        - traefik.http.routers.swarmprom-prometheus-http.middlewares=https-redirect@file
+        - traefik.http.routers.swarmprom-prometheus-https.rule=Host(`prometheus.${DOMAIN?Variable DOMAIN not set}`)
+        - traefik.http.routers.swarmprom-prometheus-https.entrypoints=web-secured
+        - traefik.http.routers.swarmprom-prometheus-https.tls=true
+        # - traefik.http.routers.swarmprom-prometheus-https.tls.certresolver=le
+        - traefik.http.services.swarmprom-prometheus.loadbalancer.server.port=9090
+        - traefik.http.middlewares.swarmprom-prometheus-auth.basicauth.users=${ADMIN_USER?Variable ADMIN_USER not set}:${HASHED_PASSWORD?Variable HASHED_PASSWORD not set}
+        - traefik.http.routers.swarmprom-prometheus-https.middlewares=swarmprom-prometheus-auth
