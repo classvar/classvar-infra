@@ -30,8 +30,8 @@ Features:
 - Realtime Chat
 - Realtime Notification
 
-WebRTC ([wrtc](https://github.com/node-webrtc/node-webrtc))
-- Server-side Recording (Not ready for few issues)
+#### WebRTC ([wrtc](https://github.com/node-webrtc/node-webrtc))
+- Server-side Recording (Not ready for cloud environment)
 
 #### STUN/TURN Server
 
