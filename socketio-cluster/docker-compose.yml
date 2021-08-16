@@ -1,0 +1,69 @@
+version: "3.7"
+
+networks:
+  net:
+    driver: overlay
+    external: true
+
+services:
+  traefik:
+    image: traefik:2.0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    ports:
+      - "80:80"
+    networks:
+      - net
+    command:
+      ## Provider Settings
+      - --providers.docker=true # <== provider로 Docker 사용
+      - --providers.docker.swarmMode=true # <== Swarm Mode 사용
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=net # 트래픽이 컨테이너로 접속할 때 쓸 network 이름. (정확히 무슨 기능인지는 잘..)
+      ## Log Settings (options: ERROR, DEBUG, PANIC, FATAL, WARN, INFO)
+      - --api.debug=true # <== 디버그 출력 활성화
+      - --api.insecure=true # <== insecure api (HTTP API) 활성화.
+      - --api.dashboard=true # <== 대시보드 활성화
+      - --log.level=DEBUG # <== 로그 레벨 설정 (docker logs traefik)
+      - --log.filePath=/var/log/traefik.log
+      - --accesslog=true
+      - --accesslog.filepath=/var/log/access.log
+      ## Entrypoints Settings
+      - --entrypoints.web.address=:80 # <== 엔트리포인트 정의
+    deploy:
+      placement:
+        constraints:
+          - node.role == manager
+      labels:
+        ## Dashboard Settings
+        - traefik.enable=true
+        - traefik.docker.network=net
+        # 이름이 dashboard여서 안 되나...? 그게 아니었음. command가 labels에 있었음;
+        - traefik.http.routers.traefik_dashboard.entrypoints=web
+        - traefik.http.routers.traefik_dashboard.service=api@internal # <== Enabling the api to be a service to access
+        - traefik.http.routers.traefik_dashboard.rule=Host(`traefik.localhost`)
+        - traefik.http.services.api@internal.loadbalancer.server.port=8080
+
+  chat:
+    image: seongbin9786/chat
+    networks:
+      - net
+    deploy:
+      mode: replicated
+      replicas: 3
+      labels:
+        - traefik.enable=true
+        - traefik.docker.network=net
+        - traefik.http.routers.chat.entrypoints=web
+        - traefik.http.routers.chat.rule=Host(`chat.localhost`)
+        - traefik.http.services.chat.loadBalancer.sticky.cookie.name=server_id
+        - traefik.http.services.chat.loadBalancer.sticky.cookie.httpOnly=true
+        - traefik.http.services.chat.loadbalancer.server.port=3000
+
+  redis:
+    image: redis:6-alpine
+    networks:
+      - net
+    deploy:
+      labels:
+        - traefik.enable=false
